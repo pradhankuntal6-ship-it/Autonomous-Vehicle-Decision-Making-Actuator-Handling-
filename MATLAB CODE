@@ -1,0 +1,199 @@
+clear; clc; close all;
+
+%% Simulation setup
+dt = 0.05;
+simulationTime = 30;
+t = 0:dt:simulationTime;
+n = numel(t);
+
+% Simplified vehicle parameters
+wheelbase = 2.7;
+turnSteer = deg2rad(12);
+cruiseSpeed = 8.0;
+maxAcceleration = 1.8;
+serviceDeceleration = 3.5;
+
+% Road events
+crossingX = 45;
+stopSignX = 105;
+pedestrianStart = 4.0;
+pedestrianEnd = 8.0;
+yieldDistance = 18;
+stopDistance = 22;
+stopDwell = 2.5;
+turnDuration = 3.0;
+
+% Logs: state codes are 1=CRUISE, 2=YIELD, 3=STOP, 4=TURN.
+stateLog = zeros(1,n);
+speedLog = zeros(1,n);
+xLog = zeros(1,n);
+yLog = zeros(1,n);
+yawLog = zeros(1,n);
+throttleLog = zeros(1,n);
+brakeLog = zeros(1,n);
+steerLog = zeros(1,n);
+
+% Initial vehicle state
+x = 0; y = 0; yaw = 0; speed = 0;
+state = 1;
+stopSignHandled = false;
+stopStartTime = NaN;
+turnStartTime = NaN;
+
+for k = 1:n
+    now = t(k);
+    pedestrianActive = now >= pedestrianStart && now <= pedestrianEnd;
+    distanceToCrossing = crossingX - x;
+    distanceToStopSign = stopSignX - x;
+    stopSignAhead = ~stopSignHandled && distanceToStopSign >= 0 && ...
+        distanceToStopSign <= stopDistance;
+
+    % Decision layer: pedestrian safety takes priority over the stop sign.
+    if pedestrianActive && distanceToCrossing >= 0 && ...
+            distanceToCrossing <= yieldDistance
+        state = 2;
+    elseif ~isnan(stopStartTime) && ~stopSignHandled
+        if now - stopStartTime >= stopDwell
+            stopSignHandled = true;
+            state = 4;
+            turnStartTime = now;
+        else
+            state = 3;
+        end
+    elseif stopSignAhead
+        state = 3;
+        if speed <= 0.15 && isnan(stopStartTime)
+            stopStartTime = now;
+        end
+    elseif state == 4
+        if now - turnStartTime >= turnDuration
+            state = 1;
+        end
+    else
+        state = 1;
+    end
+
+    % Actuator mapping: normalized throttle/brake and front wheel angle.
+    throttle = 0;
+    brake = 0;
+    steer = 0;
+    targetSpeed = cruiseSpeed;
+    switch state
+        case 1
+            targetSpeed = cruiseSpeed;
+        case 2
+            targetSpeed = 0;
+            brake = 0.75;
+        case 3
+            targetSpeed = 0;
+            brake = 1.0;
+        case 4
+            targetSpeed = min(cruiseSpeed * 0.55, 4.5);
+            steer = turnSteer;
+    end
+
+    if state == 1 || state == 4
+        if speed < targetSpeed
+            throttle = min(1, (targetSpeed - speed) / maxAcceleration);
+        else
+            brake = min(1, (speed - targetSpeed) / serviceDeceleration);
+        end
+    end
+
+    % Simple bicycle kinematics and longitudinal actuator response.
+    acceleration = throttle * maxAcceleration - brake * serviceDeceleration;
+    speed = max(0, min(cruiseSpeed, speed + acceleration * dt));
+    yawRate = speed / wheelbase * tan(steer);
+    yaw = yaw + yawRate * dt;
+    x = x + speed * cos(yaw) * dt;
+    y = y + speed * sin(yaw) * dt;
+
+    stateLog(k) = state;
+    speedLog(k) = speed;
+    xLog(k) = x;
+    yLog(k) = y;
+    yawLog(k) = yaw;
+    throttleLog(k) = throttle;
+    brakeLog(k) = brake;
+    steerLog(k) = steer;
+end
+
+%% Plain-language result
+yieldTime = sum(stateLog == 2) * dt;
+stopTime = sum(stateLog == 3) * dt;
+turnTime = sum(stateLog == 4) * dt;
+fprintf('\n============================================\n');
+fprintf('  WHAT THE VEHICLE DID\n');
+fprintf('============================================\n');
+fprintf('1. A pedestrian was at the crossing. The vehicle slowed down and waited.\n');
+fprintf('2. At the stop sign, it stopped fully for %.1f seconds.\n', stopDwell);
+fprintf('3. It then made a right turn and continued driving.\n');
+fprintf('\nMaximum speed: %.1f km/h\n', max(speedLog)*3.6);
+fprintf('Time yielding: %.1f seconds | stopped: %.1f seconds | turning: %.1f seconds\n', ...
+    yieldTime, stopTime, turnTime);
+fprintf('============================================\n\n');
+
+%% One-glance visual summary
+% Use familiar words, clear event labels, and a colored timeline instead of
+% separate engineering charts and normalized actuator signals.
+figure('Name','What the Vehicle Did','Color','w','Position',[100 100 1100 650]);
+stateNames = {'DRIVING','WAITING FOR PEDESTRIAN','STOPPED AT SIGN','TURNING RIGHT'};
+stateColors = [0.20 0.55 0.85; 0.95 0.65 0.15; 0.85 0.25 0.20; 0.25 0.65 0.40];
+
+% Top panel: a simple overhead view of the route and two events.
+ax1 = axes('Position',[0.09 0.39 0.84 0.49]);
+hold(ax1,'on');
+plot(ax1,xLog,yLog,'-','Color',[0.25 0.25 0.25],'LineWidth',2);
+for s = 1:4
+    selected = stateLog == s;
+    plot(ax1,xLog(selected),yLog(selected),'.','Color',stateColors(s,:), ...
+        'MarkerSize',10);
+end
+plot(ax1,crossingX,0,'v','MarkerFaceColor',[0.95 0.65 0.15], ...
+    'MarkerEdgeColor','k','MarkerSize',11);
+plot(ax1,stopSignX,0,'s','MarkerFaceColor',[0.85 0.25 0.20], ...
+    'MarkerEdgeColor','k','MarkerSize',11);
+plot(ax1,xLog(1),yLog(1),'o','MarkerFaceColor',[0.2 0.55 0.85], ...
+    'MarkerEdgeColor','k','MarkerSize',8);
+plot(ax1,xLog(end),yLog(end),'p','MarkerFaceColor',[0.25 0.65 0.40], ...
+    'MarkerEdgeColor','k','MarkerSize',10);
+yLimits = [min(yLog)-4 max(yLog)+5];
+plot(ax1,[crossingX crossingX],yLimits,'--','Color',[0.85 0.50 0.05], ...
+    'LineWidth',1.3);
+plot(ax1,[stopSignX stopSignX],yLimits,'--','Color',[0.75 0.15 0.12], ...
+    'LineWidth',1.3);
+text(ax1,crossingX,yLimits(2)-1,'PEDESTRIAN CROSSING','HorizontalAlignment','center', ...
+    'FontWeight','bold','Color',[0.55 0.35 0.05]);
+text(ax1,stopSignX,yLimits(2)-1,'STOP SIGN','HorizontalAlignment','center', ...
+    'FontWeight','bold','Color',[0.65 0.12 0.10]);
+text(ax1,xLog(1),yLimits(1)+1,'START','HorizontalAlignment','center','FontWeight','bold');
+text(ax1,xLog(end),yLimits(1)+1,'FINISH','HorizontalAlignment','center','FontWeight','bold');
+plot(ax1,[0 stopSignX+20],[0 0],'k:','LineWidth',0.8);
+xlim(ax1,[-5 stopSignX+20]); ylim(ax1,yLimits);
+yticks(ax1,[]); grid(ax1,'on'); box(ax1,'on');
+xlabel(ax1,'Road position (metres)');
+title(ax1,'ROUTE  |  The vehicle waits for the pedestrian, stops at the sign, then turns right', ...
+    'FontSize',12);
+
+% Bottom panel: colored blocks explain the vehicle's decision over time.
+ax2 = axes('Position',[0.09 0.13 0.84 0.16]);
+hold(ax2,'on');
+changeIdx = [1 find(diff(stateLog) ~= 0) + 1 n + 1];
+for j = 1:numel(changeIdx)-1
+    first = changeIdx(j);
+    last = changeIdx(j+1)-1;
+    thisState = stateLog(first);
+    left = t(first);
+    right = t(last) + dt;
+    patch(ax2,[left right right left],[0 0 1 1],stateColors(thisState,:), ...
+        'EdgeColor','w','LineWidth',1.2);
+    if right-left >= 0.8
+        text(ax2,(left+right)/2,0.5,stateNames{thisState}, ...
+            'HorizontalAlignment','center','VerticalAlignment','middle', ...
+            'FontSize',9,'FontWeight','bold','Color','w','Interpreter','none');
+    end
+end
+xlim(ax2,[0 simulationTime]); ylim(ax2,[0 1]); yticks(ax2,[]);
+xlabel(ax2,'Simulation time (seconds)');
+title(ax2,'DECISION TIMELINE  |  Read from left to right');
+box(ax2,'on');
