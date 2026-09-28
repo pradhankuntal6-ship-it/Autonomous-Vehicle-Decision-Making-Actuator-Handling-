@@ -1,6 +1,6 @@
 # Simplified Autonomous Vehicle Decision Module
 
-This MATLAB project implements **Module 2, Project 4** from the assignment: a basic autonomous vehicle decision module that chooses when to cruise, yield, stop, and turn, then simulates the corresponding throttle, brake, and steering commands.
+This MATLAB project implements  a basic autonomous vehicle decision module that chooses when to cruise, yield, stop, and turn, then simulates the corresponding throttle, brake, and steering commands.
 
 This is the simplest project in the assignment to build and demonstrate in MATLAB because it uses a small finite-state machine and a lightweight vehicle model. It does not require ROS, Carla, Simulink, external datasets, or add-on toolboxes.
 
